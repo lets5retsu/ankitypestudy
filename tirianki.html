@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>地理タイピング暗記ゲーム</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;background:#f5f7fb;color:#172033}
+header{padding:10px 16px;background:#18243a;color:white}
+h1{margin:0;font-size:18px}
+main{max-width:1400px;margin:auto;padding:8px}
+.controls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px}
+button,select,input{font:inherit;border:1px solid #cbd3df;border-radius:6px;padding:5px 8px;background:white;font-size:13px}
+button{cursor:pointer}
+button.primary{background:#2563eb;color:#fff;border-color:#2563eb}
+button.danger{background:#fff0f0;color:#b42318;border-color:#f0b4b4}
+button.active{background:#172033;color:white}
+#map{height:70vh;min-height:480px;border-radius:12px;border:1px solid #d9e0ea;background:#dfe8ef;position:relative}
+.map-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.panel{background:white;border:1px solid #d9e0ea;border-radius:12px;padding:8px 12px;margin-bottom:6px}
+.toprow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}
+#answer{width:100%;font-size:16px;padding:8px}
+.stats{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}
+.badge{padding:3px 7px;border-radius:999px;background:#eef2f7}
+.good{color:#087443}.bad{color:#b42318}
+#message{min-height:18px;margin-top:2px;font-weight:700;font-size:13px}
+#results{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;max-height:80px;overflow:auto}
+.result{padding:3px 6px;border-radius:6px;background:#e8f5ed;color:#08683b;font-size:12px}
+.result.unanswered-tag{background:#fde8e8;color:#b42318}
+.help{font-size:11px;color:#657085}
+.leaflet-tooltip{font-weight:700}
+.revealed-unanswered{background:#f8d7da !important;border-color:#f5c6cb !important;color:#721c24 !important}
+.unanswered-highlight{animation:unansweredPulse 1s ease-in-out infinite alternate !important}
+@keyframes unansweredPulse{from{fill-opacity:.55;stroke-width:1.5}to{fill-opacity:.95;stroke-width:3.5}}
+
+/* 画面右上に固定する進捗表示パネル */
+#prefProgressBox {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd3df;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-size: 13px;
+  font-weight: 700;
+  display: none;
+  pointer-events: none;
+}
+@media(max-width:800px){.toprow{grid-template-columns:1fr}.controls{align-items:stretch}#map{height:60vh;min-height:380px}}
+</style>
+</head>
+<body>
+<header><h1>🌍 地理タイピング暗記ゲーム</h1></header>
+<main>
+<div class="panel">
+  <div class="controls">
+    <button class="mode active" data-mode="world">世界の国</button>
+    <button class="mode" data-mode="prefecture">47都道府県</button>
+    <button class="mode" data-mode="municipality">市区町村</button>
+    <button class="mode" data-mode="municipality-hard">市区町村ゲキムズ</button>
+    <select id="prefSelect" style="display:none"></select>
+    <label class="badge" style="cursor:pointer"><input id="autoZoom" type="checkbox" checked> 正解地点へ自動ズーム</label>
+    <label class="badge" style="cursor:pointer"><input id="highlightUnanswered" type="checkbox"> 未正解の場所を強調</label>
+    <button id="start" class="primary">ゲーム開始 / リセット</button>
+    <button id="giveup" class="danger">降参・答え合わせ</button>
+  </div>
+  <div class="toprow">
+    <input id="answer" autocomplete="off" spellcheck="false" placeholder="地名を入力して Enter">
+    <div class="stats"><span class="badge">正解 <b id="correct">0</b></span><span class="badge">残り <b id="remaining">0</b></span><span class="badge">時間 <b id="time">0:00</b></span></div>
+    <div id="accuracy">正答率 --%</div>
+  </div>
+  <div id="message"></div>
+  <div class="help">入力 → Enter。郡名や支庁名を省いて入力できます。政令指定都市の区は「市名＋区名」を入力してください。ひらがな入力にも対応。</div>
+  <div id="results"></div>
+</div>
+<div id="map">
+  <div id="prefProgressBox"></div>
+</div>
+<div class="map-actions">
+  <button id="resetView">地図を初期位置に戻す</button>
+  <button id="zoomIn">＋ 拡大</button>
+  <button id="zoomOut">− 縮小</button>
+</div>
+<div class="panel help" id="source" style="margin-top:6px">
+  地図データ：世界 Natural Earth、日本の行政区域データ（国土交通省 国土数値情報を基に加工した公開データ）。日本の市区町村データは SmartNews Media Research Institute 公開データおよび code4fukui ひらがなデータを利用。
+</div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+const DEFAULT_ANSWER_DICTIONARY = {
+  "佐賀市": ["さがし", "さが"],
+  "福岡市": ["ふくおかし", "ふくおか"],
+  "長崎市": ["ながさきし", "ながさき"],
+  "熊本市": ["くまもとし", "くまもと"],
+  "大分市": ["おおいたし", "おおいた"],
+  "宮崎市": ["みやざきし", "みやざき"],
+  "鹿児島市": ["かごしまし", "かごしま"],
+  "那覇市": ["なはし", "なは"],
+  "札幌市": ["さっぽろし", "さっぽろ"],
+  "仙台市": ["せんだいし", "せんだい"],
+  "横浜市": ["よこはまし", "よこはま"],
+  "名古屋市": ["なごやし", "なごや"],
+  "京都市": ["きょうとし", "きょうと"],
+  "大阪市": ["おおさかし", "おおさか"],
+  "神戸市": ["こうべし", "こうべ"],
+  "広島市": ["ひろしまし", "ひろしま"],
+  "色丹郡色丹村": ["しこたんぐんしこたんむら", "しこたんむら", "しこたん"],
+  "国後郡泊村": ["くなしりぐんとまりむら", "とまりむら", "とまり"],
+  "国後郡留夜別村": ["くなしりぐんるよべつむら", "るよべつむら", "るよべつ"],
+  "択捉郡留別村": ["えとろふぐんるべつむら", "るべつむら", "るべつ"],
+  "紗那郡紗那村": ["しゃなぐんしゃなむら", "しゃなむら", "しゃな"],
+  "蘂取郡蘂取村": ["しべとろぐんしべとろむら", "しべとろむら", "しべとろ"],
+  "北海道": ["ほっかいどう", "ほっかい"],
+  "青森県": ["あおもりけん", "あおもり"],
+  "岩手県": ["いわてけん", "いわて"],
+  "宮城県": ["みやぎけん", "みやぎ"],
+  "秋田県": ["あきたけん", "あきた"],
+  "山形県": ["やまがたけん", "やまがた"],
+  "福島県": ["ふくしまけん", "ふくしま"],
+  "茨城県": ["いばらきけん", "いばらき"],
+  "栃木県": ["とちぎけん", "とちぎ"],
+  "群馬県": ["ぐんまけん", "ぐんま"],
+  "埼玉県": ["さいたまけん", "さいたま"],
+  "千葉県": ["ちばけん", "ちば"],
+  "東京都": ["とうきょうと", "とうきょう", "東京"],
+  "神奈川県": ["かながわけん", "かながわ"],
+  "新潟県": ["にいがたけん", "にいがた"],
+  "富山県": ["とやまけん", "とやま"],
+  "石川県": ["いしかわけん", "いしかわ"],
+  "福井県": ["ふくいけん", "ふくい"],
+  "山梨県": ["やまなしけん", "やまなし"],
+  "長野県": ["ながのけん", "ながの"],
+  "岐阜県": ["ぎふけん", "ぎふ"],
+  "静岡県": ["しずおかけん", "しずおか"],
+  "愛知県": ["あいちけん", "あいち"],
+  "三重県": ["みえけん", "みえ"],
+  "滋賀県": ["しがけん", "しが"],
+  "京都府": ["きょうとふ", "きょうと"],
+  "大阪府": ["おおさかふ", "おおさか"],
+  "兵庫県": ["ひょうごけん", "ひょうご"],
+  "奈良県": ["ならけん", "なら"],
+  "和歌山県": ["わかやまけん", "わかやま"],
+  "鳥取県": ["とっとりけん", "とっとり"],
+  "島根県": ["しまねけん", "しまね"],
+  "岡山県": ["おかやまけん", "おかやま"],
+  "広島県": ["ひろしまけん", "ひろしま"],
+  "山口県": ["やまぐちけん", "やまぐち"],
+  "徳島県": ["とくしまけん", "とくしま"],
+  "香川県": ["かがわけん", "かがわ"],
+  "愛媛県": ["えひめけん", "えひめ"],
+  "高知県": ["こうちけん", "こうち"],
+  "福岡県": ["ふくおかけん", "ふくおか"],
+  "佐賀県": ["さがけん", "さが"],
+  "長崎県": ["ながさきけん", "ながさき"],
+  "熊本県": ["くまもとけん", "くまもと"],
+  "大分県": ["おおいたけん", "おおいた"],
+  "宮崎県": ["みやざきけん", "みやざき"],
+  "鹿児島県": ["かごしまけん", "かごしま"],
+  "沖縄県": ["おきなわけん", "おきなわ"],
+  "アメリカ合衆国": ["あめりかがっしゅうこく", "あめりか", "米国"],
+  "中国": ["ちゅうごく"],
+  "日本": ["にほん", "にっぽん"],
+  "韓国": ["かんこく"],
+  "イギリス": ["いぎりす", "英国"],
+  "蒲郡市": ["がまごおりし", "がまごおり"]
+};
+
+function getCombinedDictionary() {
+  return JSON.parse(JSON.stringify(DEFAULT_ANSWER_DICTIONARY));
+}
+
+function toHiragana(text) {
+  return (text || "").replace(/[\u30A1-\u30F6]/g, function(ch) {
+    return String.fromCharCode(ch.charCodeAt(0) - 0x60);
+  });
+}
+
+function clean(text) {
+  return (text || "").replace(/\s+/g, "").trim();
+}
+
+let muniKanaMap = new Map();
+let muniKanaCollisions = new Set();
+let lastResultNames = [];
+
+async function loadMunicipalityKanaDictionary() {
+  const DATA_URL = "https://code4fukui.github.io/localgovjp/localgovjp.json";
+  try {
+    const response = await fetch(DATA_URL);
+    if (!response.ok) return;
+    const data = await response.json();
+
+    muniKanaMap.clear();
+    muniKanaCollisions.clear();
+    const kanaToMunicipalities = new Map();
+    const noExtraToKana = new Map();
+    const noExtraConflicts = new Set();
+
+    for (const item of data) {
+      const city = clean(item.city);
+      const kana = toHiragana(clean(item.citykana));
+      if (!city || !kana) continue;
+
+      muniKanaMap.set(city, kana);
+
+      const noExtra = city.replace(/^.+郡/, "").replace(/^.+支庁/, "");
+      if (noExtra !== city) {
+        if (noExtraToKana.has(noExtra) && noExtraToKana.get(noExtra) !== kana) {
+          noExtraConflicts.add(noExtra);
+        } else {
+          noExtraToKana.set(noExtra, kana);
+        }
+      }
+
+      if (!kanaToMunicipalities.has(kana)) kanaToMunicipalities.set(kana, new Set());
+      kanaToMunicipalities.get(kana).add(city);
+    }
+
+    for (const [noExtra, kana] of noExtraToKana) {
+      if (!noExtraConflicts.has(noExtra)) {
+        muniKanaMap.set(noExtra, kana);
+      }
+    }
+
+    for (const [kana, names] of kanaToMunicipalities) {
+      if (names.size >= 2) muniKanaCollisions.add(kana);
+    }
+  } catch (e) {
+    console.warn("市区町村ひらがなデータの自動読み込みに失敗しました（スキップします）:", e);
+  }
+}
+
+const WORLD_URL="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson";
+const PREF_URL="https://raw.githubusercontent.com/smartnews-smri/japan-topography/main/data/municipality/geojson/s0010/prefectures.json";
+const MUNI_BASE="https://raw.githubusercontent.com/smartnews-smri/japan-topography/main/data/municipality/geojson/s0010/";
+
+const prefectures=[
+["01","北海道","北海道"],["02","青森県","東北"],["03","岩手県","東北"],["04","宮城県","東北"],["05","秋田県","東北"],["06","山形県","東北"],["07","福島県","東北"],
+["08","茨城県","関東"],["09","栃木県","関東"],["10","群馬県","関東"],["11","埼玉県","関東"],["12","千葉県","関東"],["13","東京都","関東"],["14","神奈川県","関東"],
+["15","新潟県","中部"],["16","富山県","中部"],["17","石川県","中部"],["18","福井県","中部"],["19","山梨県","中部"],["20","長野県","中部"],["21","岐阜県","中部"],
+["22","静岡県","中部"],["23","愛知県","中部"],["24","三重県","近畿"],["25","滋賀県","近畿"],["26","京都府","近畿"],["27","大阪府","近畿"],["28","兵庫県","近畿"],
+["29","奈良県","近畿"],["30","和歌山県","近畿"],["31","鳥取県","中国"],["32","島根県","中国"],["33","岡山県","中国"],["34","広島県","中国"],["35","山口県","中国"],
+["36","徳島県","四国"],["37","香川県","四国"],["38","愛媛県","四国"],["39","高知県","四国"],["40","福岡県","九州"],["41","佐賀県","九州"],["42","長崎県","九州"],["43","熊本県","九州"],["44","大分県","九州"],["45","宮崎県","九州"],["46","鹿児島県","九州"],["47","沖縄県","九州"]
+];
+
+const countries={
+AFG:"アフガニスタン",ALB:"アルバニア",DZA:"アルジェリア",AND:"アンドラ",AGO:"angola",
+ATG:"アンティグア・バーブーダ",ARG:"アルゼンチン",ARM:"アルメニア",AUS:"オーストラリア",AUT:"オーストリア",
+AZE:"อзербайджан",BHS:"バハマ",BHR:"バーレーン",BGD:"バングラデシュ",BRB:"バルバドス",
+BLR:"ベラルーシ",BEL:"ベルギー",BLZ:"ベリーズ",BEN:"ベナン",BTN:"ブータン",BOL:"ボリビア",
+BIH:"ボスニア・ヘルツェゴビナ",BWA:"ボツワナ",BRA:"ブラジル",BRN:"ブルネイ",BGR:"ブルガリア",
+BFA:"ブルキナファソ",BDI:"burundi",CPV:"カーボベルデ",KHM:"カンボジア",CMR:"カメルーン",
+CAN:"カナダ",CAF:"中央アフリカ共和国",TCD:"チャド",CHL:"チリ",CHN:"中国",COL:"コロンビア",
+COM:"コモロ",COG:"コンゴ共和国",COD:"コンゴ民主共和国",CRI:"コスタリカ",CIV:"コートジボワール",
+HRV:"クロアチア",CUB:"キューバ",CYP:"キプロス",CZE:"チェコ",PRK:"北朝鮮",
+DNK:"デンマーク",DJI:"ジブチ",DMA:"ドミニカ国",DOM:"ドミニカ共和国",ECU:"エクアドル",
+EGY:"エジプト",SLV:"エルサルバドル",GNQ:"赤道ギニア",ERI:"エリトリア",EST:"エストニア",
+SWZ:"エスワティニ",ETH:"エチオピア",FJI:"フィジー",FIN:"フィンランド",FRA:"フランス",
+GAB:"ガボン",GMB:"ガンビア",GEO:"ジョージア",DEU:"ドイツ",GHA:"ガーナ",GRC:"ギリシャ",
+GRD:"グレナダ",GTM:"グアテマラ",GIN:"ギニア",GNB:"ギニアビサウ",GUY:"ガイアナ",HTI:"ハイチ",
+HND:"ホンジュラス",HUN:"ハンガリー",ISL:"アイスランド",IND:"インド",IDN:"インドネシア",IRN:"イラン",
+IRQ:"イラク",IRL:"アイルランド",ISR:"イスラエル",ITA:"イタリア",JAM:"ジャマイカ",JPN:"日本",
+JOR:"ヨルダン",KAZ:"カザフスタン",KEN:"ケニア",KIR:"キリバス",KWT:"クウェート",KGZ:"キルギス",
+LAO:"ラオス",LVA:"latvia",LBN:"レバノン",LSO:"レソト",LBR:"リベリア",LBY:"リビヤ",
+LIE:"リヒテンシュタイン",LTU:"リトアニア",LUX:"ルクセンブルク",MDG:"マダガスカル",MWI:"マラウイ",
+MYS:"マレーシア",MDV:"モルディブ",MLI:"マリ",MLT:"マルタ",MHL:"マーシャル諸島",MRT:"モーリタニア",
+MUS:"モーリシャス",MEX:"メキシコ",FSM:"ミクロネシア連邦",MDA:"モルドバ",MCO:"モナコ",MNG:"モンゴル",
+MNE:"モンテネグロ",MAR:"モロッコ",MOZ:"モザンビーク",MMR:"ミャンマー",NAM:"ナミビア",NRU:"ナウル",
+NPL:"ネパール",NLD:"オランダ",NZL:"ニュージーランド",NIC:"ニカラグア",NER:"ニジェール",NGA:"ナイジェリア",
+MKD:"北マケドニア",NOR:"ノルウェー",OMN:"オマーン",PAK:"パキスタン",PLW:"パラオ",PAN:"パナマ",
+PNG:"パプアニューギニア",PRY:"パラグアイ",PER:"ペルー",PHL:"フィリピン",POL:"ポーランド",
+PRT:"ポルトガル",QAT:"カタール",KOR:"韓国",ROU:"ルーマニア",RUS:"ロシア",RWA:"ルワンダ",
+KNA:"セントクリストファー・ネービス",LCA:"セントルシア",VCT:"セントビンセント及びグレナディーン諸島",
+WSM:"サモア",SMR:"サンマリノ",STP:"サントメ・プリンシペ",SAU:"サウジアラビア",SEN:"セネガル",
+SRB:"セルビア",SYC:"セーシェル",SLE:"シエラレオネ",SGP:"シンガポール",SVK:"スロバキア",
+SVN:"スロベニア",SLB:"ソロモン諸島",SOM:"ソマリア",ZAF:"南アフリカ",SSD:"南スーダン",
+ESP:"スペイン",LKA:"スリランカ",SDN:"スーダン",SUR:"surinami",SWE:"スウェーデン",CHE:"スイス",
+SYR:"シリア",TJK:"タジキスタン",TZA:"タンザニア",THA:"タイ",TLS:"東ティモール",TGO:"トーゴ",
+TON:"トンガ",TTO:"トリニダード・トバゴ",TUN:"チュニジア",TUR:"トルコ",TKM:"トルクメニスタン",
+TUV:"ツバル",UGA:"ウガンダ",UKR:"ウクライナ",ARE:"アラブ首長国連邦",GBR:"イギリス",USA:"アメリカ合衆国",
+URY:"ウルグアイ",UZB:"ウズベキスタン",VUT:"バヌアツ",VAT:"バチカン市国",VEN:"ベネズエラ",
+VNM:"ベトナム",YEM:"イエメン",ZMB:"ザンビア",ZWE:"ジンバブエ",PSE:"パレスチナ"
+};
+
+function norm(s){
+  return (s||"")
+    .trim()
+    .normalize("NFKC")
+    .replace(/[\u30a1-\u30f6]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60))
+    .replace(/[  ・･,,,、。．.-‐‑–—]/g,"")
+    .replace(/ヶ/g,"け").replace(/髙/g,"高").replace(/﨑/g,"崎")
+    .replace(/梼/g, "檮")
+    .toLowerCase();
+}
+
+const map=L.map("map",{worldCopyJump:true,zoomControl:true});
+L.control.scale().addTo(map);
+const empty=L.geoJSON().addTo(map);
+const prefBorderLayer=L.geoJSON(null,{style:{color:"#4b5563",weight:2.0,opacity:0.95,fill:false,fillOpacity:0,interactive:false}}).addTo(map);
+map.setView([20,0],2);
+
+let mode="world", prefCode="", geo=null, features=[], remaining=new Map(), revealed=new Set(), unanswered=new Set(), misses=0, startTime=0, timerId=null, answerTotal=0, gameOver=false;
+let hoveredKey = null;
+let hoveredFeatureKey = null;
+const answerEl=document.getElementById("answer"), prefEl=document.getElementById("prefSelect");
+prefEl.innerHTML='<option value="">都道府県を選択</option>'+prefectures.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join("");
+
+function setMsg(s,cls=""){const e=document.getElementById("message");if(e){e.textContent=s;e.className=cls}}
+
+let audioCtx = null;
+
+function playTone(frequency, duration, type="sine", volume=0.08, delay=0){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const start = audioCtx.currentTime + delay;
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(volume, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+  }catch(e){}
+}
+
+function playCorrectSound(){
+  playTone(880, 0.12, "sine", 0.07, 0);
+  playTone(1175, 0.16, "sine", 0.07, 0.10);
+}
+
+function playIncorrectSound(){
+  playTone(220, 0.16, "sawtooth", 0.045, 0);
+  playTone(165, 0.20, "sawtooth", 0.035, 0.13);
+}
+
+function styleFeature(feature){
+  const key=feature.properties.__key;
+  const highlightUnansweredChecked = document.getElementById("highlightUnanswered").checked;
+  if(unanswered.has(key)){
+    return {
+      color:"#e53e3e",
+      weight:highlightUnansweredChecked?3:1,
+      fillColor:"#feb2b2",
+      fillOpacity:highlightUnansweredChecked?0.92:0.75
+    };
+  }
+  if(highlightUnansweredChecked && !revealed.has(key) && !gameOver){
+    return {
+      color:"#d97706",
+      weight:3,
+      fillColor:"#fde68a",
+      fillOpacity:0.9
+    };
+  }
+  return {
+    color:"#718096",
+    weight:0.8,
+    fillColor:revealed.has(key)?"#38a169":"#dbe4ec",
+    fillOpacity:0.72
+  };
+}
+
+function labelFor(f){
+ const p=f.properties||{};
+ if(mode==="world") return p.__ja||p.NAME||p.ADMIN;
+ if(mode==="prefecture") return p.N03_001;
+ return p.__name;
+}
+
+function getPrefectureStats(prefName) {
+  if (!geo || !geo.features) return { done: 0, total: 0 };
+  let done = 0, total = 0;
+  geo.features.forEach(f => {
+    const p = f.properties || {};
+    if (p.__pref === prefName && !/所属未定地/.test(p.__name || "")) {
+      total++;
+      if (revealed.has(p.__key)) done++;
+    }
+  });
+  return { done, total };
+}
+
+function updatePrefProgressBox() {
+  const box = document.getElementById("prefProgressBox");
+  if (mode === "municipality-hard" && hoveredFeatureKey) {
+    let prefName = null;
+    const feat = geo.features.find(f => f.properties && f.properties.__key === hoveredFeatureKey);
+    if (feat && feat.properties) prefName = feat.properties.__pref;
+    
+    if (prefName) {
+      const stats = getPrefectureStats(prefName);
+      const pct = stats.total ? Math.round(stats.done / stats.total * 100) : 0;
+      box.textContent = `${prefName}: ${stats.done}/${stats.total} (${pct}%)`;
+      box.style.display = "block";
+      return;
+    }
+  }
+  box.style.display = "none";
+}
+
+function draw(){
+ empty.clearLayers();
+ if(!geo)return;
+
+ empty.addData(geo);
+ empty.eachLayer(l=>{
+   if(!l.feature || !l.feature.properties) return;
+   l.setStyle(styleFeature(l.feature));
+   const key=l.feature.properties.__key;
+
+   if(gameOver){
+     if(hoveredKey === key){
+       l.bindTooltip(labelFor(l.feature),{permanent:true,direction:"center",className:"revealed-label revealed-hover"});
+     } else if(l.getTooltip()){
+       l.unbindTooltip();
+     }
+   } else if(revealed.has(key) && hoveredFeatureKey === key){
+     l.bindTooltip(labelFor(l.feature),{permanent:true,direction:"center",className:"revealed-label"});
+   } else {
+     if(l.getTooltip()){
+       l.unbindTooltip();
+     }
+   }
+
+   l.on('mouseover', () => {
+     if(!l.feature || !l.feature.properties) return;
+     hoveredFeatureKey = key;
+     if(gameOver){
+       hoveredKey = key;
+     }
+     updatePrefProgressBox();
+     draw();
+   });
+
+   l.on('mouseout', () => {
+     if(hoveredFeatureKey === key){
+       hoveredFeatureKey = null;
+     }
+     if(gameOver && hoveredKey === key){
+       hoveredKey = null;
+     }
+     updatePrefProgressBox();
+     draw();
+   });
+ });
+ updatePrefProgressBox();
+} 
+
+function zoomToKey(key){
+  if(!document.getElementById("autoZoom").checked || !geo) return;
+  const target=L.geoJSON(geo,{filter:f=>f.properties && f.properties.__key===key});
+  if(target.getBounds().isValid()){
+    let minZ = 3, maxZ = 10;
+    if(mode === "world") {
+      minZ = 3; maxZ = 4;
+    } else {
+      minZ = 7; maxZ = 10;
+    }
+    const calculatedZ = map.getBoundsZoom(target.getBounds(), false, [80, 80]);
+    const z = Math.max(minZ, Math.min(maxZ, calculatedZ - 1));
+    map.flyTo(target.getBounds().getCenter(), z, {duration:0.55});
+  }
+}
+
+function updateStats(){
+  document.getElementById("correct").textContent=revealed.size;
+  document.getElementById("remaining").textContent=Math.max(0,remaining.size-revealed.size);
+  document.getElementById("accuracy").textContent=`正答率 ${answerTotal?Math.round(revealed.size/answerTotal*100):0}%`;
+
+  const html = lastResultNames.map(name => `<span class="result">${name}</span>`).join("");
+  document.getElementById("results").innerHTML=html;
+}
+
+function updateTime(){
+ if(!startTime)return;
+ const sec=Math.floor((Date.now()-startTime)/1000),m=Math.floor(sec/60),s=String(sec%60).padStart(2,"0");
+ document.getElementById("time").textContent=`${m}:${s}`;
+}
+
+function startClock(){clearInterval(timerId);startTime=Date.now();timerId=setInterval(updateTime,500);updateTime()}
+function stopClock(){clearInterval(timerId);timerId=null}
+
+function worldKey(f){
+ const p=f.properties||{};
+ return p.ADM0_A3||p.ISO_A3||p.SOV_A3||p.NAME||p.ADMIN;
+}
+
+function fitInitialView(){
+  if(!empty.getBounds().isValid()) return;
+  if(geo){
+    const temp=L.geoJSON(geo);
+    if(temp.getBounds().isValid()) map.fitBounds(temp.getBounds(),{padding:[18,18],maxZoom:6});
+  }
+}
+
+async function loadPrefectureBorders(){
+  try{
+    const d=await fetch(PREF_URL).then(r=>r.json());
+    prefBorderLayer.clearLayers();
+    prefBorderLayer.addData(d);
+  }catch(e){
+    prefBorderLayer.clearLayers();
+  }
+}
+
+function setupWorld(data){
+ geo=data;
+ const list=[];
+ data.features.forEach((f)=>{
+   const iso=worldKey(f), name=countries[iso];
+   if(name){
+     f.properties.__ja=name;
+     f.properties.__key=iso;
+     list.push([iso,name]);
+   }
+ });
+ features=list; remaining=new Map(list); answerTotal=list.length;
+ revealed=new Set(); unanswered=new Set(); misses=0; gameOver=false; hoveredKey=null; hoveredFeatureKey=null; lastResultNames=[]; draw(); fitInitialView(); startClock(); updateStats();
+ setMsg(`${answerTotal}か国を入力してください。`);
+ answerEl.placeholder="国名を入力して Enter";
+ answerEl.focus();
+}
+
+function setupPref(data){
+ geo=data;
+ const list=[];
+ data.features.forEach((f)=>{
+   const name=f.properties.N03_001;
+   if(name){
+     const key=name;
+     f.properties.__key=key;
+     f.properties.__name=name;
+     if(!list.some(x=>x[0]===key))list.push([key,name]);
+   }
+ });
+ features=list; remaining=new Map(list); answerTotal=list.length; revealed=new Set(); unanswered=new Set(); misses=0;gameOver=false;hoveredKey=null;hoveredFeatureKey=null;lastResultNames=[];startClock();draw();updateStats();
+ setMsg("47都道府県の名前を入力してください。");
+ answerEl.placeholder="都道府県名を入力して Enter";answerEl.focus();
+}
+
+function setupMuni(data){
+  geo=data; loadPrefectureBorders(); const groups=new Map();
+  data.features.forEach((f)=>{
+    const p=f.properties||{};
+    const county=p.N03_002||"";
+    const city=p.N03_003||"";
+    const ward=p.N03_004||"";
+
+    let fullName="";
+    let townOnlyName="";
+
+    if(city && ward) {
+      fullName=city+ward;
+    } else if(county && city) {
+      townOnlyName=city;
+      fullName=county+city;
+    } else if(city) {
+      fullName=city;
+    } else if(ward) {
+      fullName=ward;
+    }
+
+    if(!fullName)return;
+    if(/所属未定地/.test(fullName)) return;
+
+    const key=fullName;
+    f.properties.__key=key;
+    f.properties.__name=fullName;
+    f.properties.__townOnly = townOnlyName || (city && !ward ? city : "");
+    f.properties.__county = county;
+    f.properties.__isWard = !!(city && ward);
+
+    if(!groups.has(key)) groups.set(key, fullName);
+  });
+
+  features=[...groups.entries()];
+  remaining=new Map(features);
+  answerTotal=features.length;
+  revealed=new Set(); unanswered=new Set(); misses=0;gameOver=false;
+  hoveredKey = null;
+  hoveredFeatureKey = null;
+  lastResultNames = [];
+  draw();fitInitialView();startClock();updateStats();
+  if(mode==="municipality-hard"){
+    setMsg(`全国ゲキムズ：${answerTotal}件を入力してください。（県にカーソルを合わせると右上に進捗が表示されます）`);
+  } else {
+    setMsg(`${prefEl.options[prefEl.selectedIndex].text}：${answerTotal}件を入力してください。`);
+  }
+  answerEl.placeholder="市区町村名を入力して Enter";
+  answerEl.focus();
+}
+
+async function loadMode(){
+ stopClock(); answerEl.value=""; 
+ document.getElementById("highlightUnanswered").checked = false; 
+ setMsg("地図データを読み込み中…");
+ hoveredKey = null;
+ hoveredFeatureKey = null;
+ updatePrefProgressBox();
+ try{
+   if(mode==="world"){
+     const d=await fetch(WORLD_URL).then(r=>r.json());setupWorld(d);
+   }else if(mode==="prefecture"){
+     const d=await fetch(PREF_URL).then(r=>r.json());setupPref(d);
+   }else if(mode==="municipality"){
+     if(!prefCode){geo=null;empty.clearLayers();setMsg("都道府県を選択してください。");document.getElementById("remaining").textContent="--";return;}
+     const url=`${MUNI_BASE}N03-21_${prefCode}_210101.json`;
+     const d=await fetch(url).then(r=>r.json());setupMuni(d);
+   }else if(mode==="municipality-hard"){
+     const results=await Promise.all(prefectures.map(async ([code, name, region])=>{
+       const url=`${MUNI_BASE}N03-21_${code}_210101.json`;
+       try{
+         const json = await fetch(url).then(r=>r.json());
+         if(json && json.features){
+           json.features.forEach(f=>{ if(!f.properties) f.properties={}; f.properties.__region = region; f.properties.__pref = name; });
+         }
+         return json;
+       }catch(e){return null}
+     }));
+     const all=[];
+     results.filter(Boolean).forEach(d=>{ if(d && d.features) d.features.forEach(f=>all.push(f)); });
+     if(all.length === 0) throw new Error("市区町村データの取得に失敗しました");
+     geo={type:"FeatureCollection",features:all};
+     setupMuni(geo);
+   }
+ }catch(e){
+   setMsg("地図データの読み込みに失敗しました。ローカルサーバー経由で開いているか確認してください。","bad");
+   console.error(e);
+ }
+}
+
+function submit(){
+  if(gameOver||!remaining.size)return;
+  const inputRaw=norm(answerEl.value); if(!inputRaw)return;
+
+  const dictionary = getCombinedDictionary();
+  const inputNoExtra = inputRaw
+    .replace(/ぐん/g, "")
+    .replace(/郡/g, "")
+    .replace(/しちょう/g, "")
+    .replace(/支庁/g, "");
+
+  const hits = [];
+
+  for(const [key, name] of remaining){
+    const feat = (geo && geo.features)
+      ? geo.features.find(f => f.properties && f.properties.__key === key)
+      : null;
+    const props = feat ? feat.properties : {};
+
+    const validAnswers = [name];
+
+    if(!props.__isWard && props.__townOnly) validAnswers.push(props.__townOnly);
+
+    const nameCleaned = name.replace(/^.+郡/, "").replace(/^.+支庁/, "");
+    
+    const specificKanaMap = {
+      "中川郡池田町": ["いけだまち"],
+      "今立郡池田町": ["いけだまち"],
+      "北安曇郡池田町": ["いけだちょう", "きたあずみぐんいけだまち"],
+      "北安曇野郡池田町": ["いけだちょう"],
+      "揖斐郡池田町": ["いけだちょう"],
+      "多気郡明和町": ["めいわまち"],
+      "邑楽郡明和町": ["めいわちょう"],
+      "伊予郡松前町": ["まさきちょう", "まさき"],
+      "松前郡松前町": ["まつまえちょう", "まつまえ"],
+      "西村山郡朝日町": ["あさひまち"],
+      "下新川郡朝日町": ["あさひちょう"],
+      "三重郡朝日町": ["あさひちょう"],
+      "甘楽郡南牧村": ["なんもくむら"],
+      "南佐久郡南牧村": ["みなみまきむら"],
+      "東置賜郡川西町": ["かわにしまち"],
+      "磯城郡川西町": ["かわにしちょう"],
+      "有田郡広川町": ["ひろがわちょう"],
+      "八女郡広川町": ["ひろかわまち"],
+      "高岡郡檮原町": ["ゆすはらちょう", "ゆすはら", "梼原町", "梼原", "檮原", "ゆすはらまち"],
+      "色丹郡色丹村": ["しこたんぐんしこたんむら", "しこたんむら", "しこたん"],
+      "国後郡泊村": ["くなしりぐんとまりむら", "とまりむら", "とまり"],
+      "国後郡留夜別村": ["くなしりぐんるよべつむら", "るよべつむら", "るよべつ"],
+      "択捉郡留別村": ["えとろふぐんるべつむら", "るべつむら", "るべつ"],
+      "紗那郡紗那村": ["しゃなぐんしゃなむら", "しゃなむら", "しゃな"],
+      "蘂取郡蘂取村": ["しべとろぐんしべとろむら", "しべとろむら", "しべとろ"]
+    };
+
+    const isSpecificConflict = specificKanaMap[name] !== undefined;
+
+    if(!props.__isWard && nameCleaned && nameCleaned !== name && !isSpecificConflict) {
+      validAnswers.push(nameCleaned);
+    }
+
+    if(specificKanaMap[name]) {
+      validAnswers.push(...specificKanaMap[name]);
+    }
+
+    if(muniKanaMap.has(name)){
+      const kana=muniKanaMap.get(name);
+      if(!muniKanaCollisions.has(kana) || (props.__isWard && props.__pref === "東京都")){
+        validAnswers.push(kana);
+      }
+    }
+
+    if(!props.__isWard && props.__townOnly && muniKanaMap.has(props.__townOnly)){
+      const kana=muniKanaMap.get(props.__townOnly);
+      if(!muniKanaCollisions.has(kana) && !isSpecificConflict) validAnswers.push(kana);
+    }
+
+    if(!props.__isWard && nameCleaned && muniKanaMap.has(nameCleaned)){
+      const kana=muniKanaMap.get(nameCleaned);
+      if(!muniKanaCollisions.has(kana) && !isSpecificConflict) validAnswers.push(kana);
+    }
+
+    if(dictionary[name]) validAnswers.push(...dictionary[name]);
+    if(!props.__isWard && props.__townOnly && dictionary[props.__townOnly] && !isSpecificConflict){
+      validAnswers.push(...dictionary[props.__townOnly]);
+    }
+    if(!props.__isWard && nameCleaned && dictionary[nameCleaned] && !isSpecificConflict){
+      validAnswers.push(...dictionary[nameCleaned]);
+    }
+
+    if(name.includes("檮原町") || name.includes("梼原町")){
+      validAnswers.push("ゆすはら", "ゆすはらちょう", "ゆすはらまち", "檮原", "梼原", "檮原町", "梼原町");
+    }
+
+    const normalizedValidAnswers = [];
+    validAnswers.forEach(ans => {
+      const n=norm(ans);
+      normalizedValidAnswers.push(n);
+
+      if(!props.__isWard && (n.includes("郡") || n.includes("ぐん") || n.includes("支庁") || n.includes("しちょう"))){
+        normalizedValidAnswers.push(
+          n.replace(/^.+郡/,"")
+           .replace(/^.+?ぐん/,"")
+           .replace(/^.+?支庁/,"")
+           .replace(/^.+?しちょう/,"")
+        );
+      }
+    });
+
+    const keyNorm=norm(key);
+    normalizedValidAnswers.push(keyNorm);
+
+    if(!props.__isWard && (keyNorm.includes("郡") || keyNorm.includes("ぐん") || keyNorm.includes("支庁") || keyNorm.includes("しちょう")) && !isSpecificConflict){
+      normalizedValidAnswers.push(
+        keyNorm.replace(/^.+郡/,"")
+              .replace(/^.+?ぐん/,"")
+              .replace(/^.+?支庁/,"")
+              .replace(/^.+?しちょう/,"")
+      );
+    }
+
+    if(!props.__isWard && props.__townOnly && !isSpecificConflict){
+      normalizedValidAnswers.push(norm(props.__townOnly));
+    }
+
+    const townPartNorm = (!isSpecificConflict && props.__townOnly)
+      ? norm(props.__townOnly)
+      : (nameCleaned && !isSpecificConflict ? norm(nameCleaned) : "");
+
+    const townPartKana = (!isSpecificConflict && props.__townOnly && muniKanaMap.has(props.__townOnly))
+      ? muniKanaMap.get(props.__townOnly)
+      : "";
+
+    const nameCleanedKana = (!isSpecificConflict && nameCleaned && muniKanaMap.has(nameCleaned))
+      ? muniKanaMap.get(nameCleaned)
+      : "";
+
+    if(
+      normalizedValidAnswers.some(ans => ans === inputRaw || ans === inputNoExtra) ||
+      (townPartNorm && (townPartNorm === inputRaw || townPartNorm === inputNoExtra)) ||
+      (townPartKana && (townPartKana === inputRaw || townPartKana === inputNoExtra)) ||
+      (nameCleanedKana && (nameCleanedKana === inputRaw || nameCleanedKana === inputNoExtra)) ||
+      ((inputRaw.includes("ゆすはら") || inputRaw.includes("檮原") || inputRaw.includes("梼原")) && (name.includes("檮原町") || name.includes("梼原町")))
+    ){
+      hits.push(key);
+    }
+  }
+
+  if(hits.length){
+    hits.forEach(key => revealed.add(key));
+    lastResultNames = hits.map(key => remaining.get(key) || key);
+
+    answerEl.value="";
+    setMsg(
+      hits.length >= 2 ? `${hits.length}件正解！` : "正解！",
+      "good"
+    );
+    playCorrectSound();
+
+    draw();
+    zoomToKey(hits[0]);
+    updateStats();
+
+    if(revealed.size===remaining.size){
+      gameOver=true;
+      stopClock();
+      setMsg(`全問正解！ ${document.getElementById("time").textContent}`,"good");
+    }
+  }else{
+    misses++;
+    setMsg("不正解。もう一度！","bad");
+    playIncorrectSound();
+    updateStats();
+  }
+}
+
+function giveUp(){
+ if(!geo)return;
+ stopClock();gameOver=true;
+ unanswered.clear();
+ remaining.forEach((name,key)=>{
+   if(!revealed.has(key)){
+     unanswered.add(key);
+   }
+ });
+ draw();updateStats();setMsg("答え合わせモード：未回答の場所にマウスを合わせると名称が表示されます。","bad");
+}
+
+document.querySelectorAll(".mode").forEach(btn=>{
+  btn.addEventListener("click",(e)=>{
+    document.querySelectorAll(".mode").forEach(b=>b.classList.remove("active"));
+    e.target.classList.add("active");
+    mode=e.target.dataset.mode;
+    if(mode==="municipality"){
+      prefEl.style.display="inline-block";
+      prefCode=prefEl.value;
+    }else{
+      prefEl.style.display="none";
+      prefCode="";
+    }
+    loadMode();
+  });
+});
+
+prefEl.addEventListener("change",(e)=>{
+  prefCode=e.target.value;
+  if(mode==="municipality") loadMode();
+});
+
+answerEl.addEventListener("keydown",(e)=>{
+  if(e.key==="Enter" && !e.isComposing){
+    submit();
+  }
+});
+
+document.getElementById("start").addEventListener("click", () => {
+  if (!window.confirm("ゲームを開始（またはリセット）しますか？")) {
+    return;
+  }
+  loadMode();
+});
+
+document.getElementById("giveup").addEventListener("click", () => {
+  if (gameOver || !geo) return;
+  if (!window.confirm("本当に降参して答え合わせをしますか？")) {
+    return;
+  }
+  giveUp();
+});
+
+document.getElementById("highlightUnanswered").addEventListener("change", ()=>{
+  draw();
+});
+
+document.getElementById("resetView").addEventListener("click", fitInitialView);
+document.getElementById("zoomIn").addEventListener("click", ()=>map.zoomIn());
+document.getElementById("zoomOut").addEventListener("click", ()=>map.zoomOut());
+
+loadMunicipalityKanaDictionary().then(()=>{
+  loadMode();
+});
+</script>
+</body>
+</html>
