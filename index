@@ -131,7 +131,7 @@
       <div class="card-content">
         <span class="badge">社会科・地理</span>
         <h2>地理タイピング暗記ゲーム</h2>
-        <p>世界の国、47都道府県、全国の市区町村をタイピングしながら楽しく暗記できるゲームです[cite: 1, 2]。</p>
+        <p>世界の国、47都道府県、全国の市区町村をタイピングしながら楽しく暗記できるゲームです。</p>
       </div>
       <!-- ※実際のゲームファイルのファイル名（コロンを抜いた名前）を href に指定してください -->
       <a href="tirianki.html" class="btn">ゲームをはじめる</a>
@@ -140,8 +140,8 @@
     <!-- その他の学習ゲーム（追加用サンプル） -->
     <div class="card">
       <div class="card-content">
-        <span class="badge">英語・語学</span>
-        <h2>英単語スピードマスター</h2>
+        <span class="badge">国語</span>
+        <h2>百人一首暗記ゲーム</h2>
         <p>制限時間内に素早く英単語の意味を答えてボキャブラリーを強化するゲーム（準備中）。</p>
       </div>
       <a href="#" class="btn secondary">近日公開</a>
@@ -149,8 +149,8 @@
 
     <div class="card">
       <div class="card-content">
-        <span class="badge">算数・数学</span>
-        <h2>高速計算アタック</h2>
+        <span class="badge">理科・化学</span>
+        <h2>周期表暗記ゲーム</h2>
         <p>四則演算の問題をテンポよく解いて計算スピードを限界まで高めるトレーニングゲーム（準備中）。</p>
       </div>
       <a href="#" class="btn secondary">近日公開</a>
