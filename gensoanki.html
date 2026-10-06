@@ -413,10 +413,11 @@ function submit() {
     setTimeout(() => answerEl.classList.remove("correct-flash"), 300);
 
     setMsg(hits.length >= 2 ? `${hits.length}件正解！` : `正解：${hits[0].name} (${hits[0].sym})`, "good");
+    playCorrectSound();
 
     renderTable();
     updateStats();
-    playCorrectSound();
+    
 
     if(revealed.size === targetElements.length) {
       gameOver = true;
@@ -430,11 +431,13 @@ function submit() {
 
     if (alreadyRevealed) {
       setMsg(`「${rawVal}」はすでに回答済みです。`, "bad");
+      playIncorrectSound();
     } else {
       setMsg(`「${rawVal}」は不正解です。`, "bad");
+      playIncorrectSound();
     }
     updateStats();
-    playIncorrectSound();
+    
   }
 }
 
